@@ -3,16 +3,26 @@
 Emit a quick Ctrl tap after each left mouse-button release so GNOME's
 "Locate Pointer" ripple can be used as a mouse-click highlight under Wayland.
 
-Enable the GNOME effect as your normal user:
+Usage
+-----
+Enable GNOME's locate-pointer ripple as your normal user:
     gsettings set org.gnome.desktop.interface locate-pointer true
+
+Install dependencies on Ubuntu/Debian:
+    sudo apt install python3-evdev
+    sudo modprobe uinput
 
 Run this script with enough permission to read /dev/input/event* and write
 /dev/uinput, usually:
     sudo python3 ~/click-to-gnome-locate-pointer.py
 
-Dependencies on Ubuntu/Debian:
-    sudo apt install python3-evdev
-    sudo modprobe uinput
+Optional:
+    sudo python3 ~/click-to-gnome-locate-pointer.py --list
+    sudo python3 ~/click-to-gnome-locate-pointer.py --ignore-drags 12
+
+Turn it off:
+    # Stop the running script with Ctrl-C, or kill/stop its service if you made one.
+    gsettings set org.gnome.desktop.interface locate-pointer false
 """
 
 from __future__ import annotations

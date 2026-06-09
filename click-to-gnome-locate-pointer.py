@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""
+Emit a quick Ctrl tap after each left mouse-button release so GNOME's
+"Locate Pointer" ripple can be used as a mouse-click highlight under Wayland.
+
+Enable the GNOME effect as your normal user:
+    gsettings set org.gnome.desktop.interface locate-pointer true
+
+Run this script with enough permission to read /dev/input/event* and write
+/dev/uinput, usually:
+    sudo python3 ~/click-to-gnome-locate-pointer.py
+
+Dependencies on Ubuntu/Debian:
+    sudo apt install python3-evdev
+    sudo modprobe uinput
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import select
+import sys
+import time
+from dataclasses import dataclass
+
+try:
+    from evdev import InputDevice, UInput, ecodes, list_devices
+except ImportError:  # pragma: no cover - friendly runtime error
+    print(
+        "Missing Python module 'evdev'. Install it with:\n"
+        "  sudo apt install python3-evdev\n"
+        "or:\n"
+        "  python3 -m pip install --user evdev",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+
+@dataclass
+class DeviceState:
+    down: bool = False
+    rel_motion: int = 0
+    abs_x: int | None = None
+    abs_y: int | None = None
+    start_abs_x: int | None = None
+    start_abs_y: int | None = None
+
+
+def key_code(name: str) -> int:
+    code = ecodes.ecodes.get(name)
+    if code is None:
+        raise SystemExit(f"Unknown key code {name!r}; try KEY_LEFTCTRL")
+    return code
+
+
+def open_device(path: str) -> InputDevice | None:
+    try:
+        return InputDevice(path)
+    except PermissionError:
+        print(f"Permission denied opening {path}; try running with sudo", file=sys.stderr)
+    except OSError as exc:
+        print(f"Could not open {path}: {exc}", file=sys.stderr)
+    return None
+
+
+def is_pointer(dev: InputDevice) -> bool:
+    try:
+        caps = dev.capabilities(absinfo=False)
+    except OSError:
+        return False
+
+    keys = set(caps.get(ecodes.EV_KEY, []))
+    rels = set(caps.get(ecodes.EV_REL, []))
+    abss = set(caps.get(ecodes.EV_ABS, []))
+
+    has_left_click = ecodes.BTN_LEFT in keys
+    has_pointer_axis = (
+        ecodes.REL_X in rels
+        or ecodes.REL_Y in rels
+        or ecodes.ABS_X in abss
+        or ecodes.ABS_Y in abss
+    )
+    return has_left_click and has_pointer_axis
+
+
+def pointer_devices() -> list[InputDevice]:
+    devices: list[InputDevice] = []
+    for path in list_devices():
+        dev = open_device(path)
+        if dev and is_pointer(dev):
+            devices.append(dev)
+        elif dev:
+            dev.close()
+    return devices
+
+
+def describe(dev: InputDevice) -> str:
+    return f"{dev.path:18} {dev.name} ({dev.phys or 'no-phys'})"
+
+
+def drag_distance(state: DeviceState) -> int:
+    rel = state.rel_motion
+    abs_dist = 0
+    if None not in (state.abs_x, state.abs_y, state.start_abs_x, state.start_abs_y):
+        abs_dist = abs(state.abs_x - state.start_abs_x) + abs(state.abs_y - state.start_abs_y)  # type: ignore[operator]
+    return max(rel, abs_dist)
+
+
+def tap(ui: UInput, code: int, tap_ms: int) -> None:
+    ui.write(ecodes.EV_KEY, code, 1)
+    ui.syn()
+    time.sleep(tap_ms / 1000)
+    ui.write(ecodes.EV_KEY, code, 0)
+    ui.syn()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Convert left mouse-button release into a brief Ctrl tap for GNOME locate-pointer."
+    )
+    parser.add_argument(
+        "-d",
+        "--device",
+        action="append",
+        help="/dev/input/eventX device to watch; repeatable. Default: all detected pointer devices.",
+    )
+    parser.add_argument("--list", action="store_true", help="List detected pointer devices and exit.")
+    parser.add_argument("--key", default="KEY_LEFTCTRL", help="uinput key to emit; default KEY_LEFTCTRL.")
+    parser.add_argument("--tap-ms", type=int, default=25, help="Ctrl tap length in milliseconds; default 25.")
+    parser.add_argument(
+        "--ignore-drags",
+        type=int,
+        default=None,
+        metavar="PIXELS",
+        help="Do not emit Ctrl if movement while held exceeds PIXELS; disabled by default.",
+    )
+    args = parser.parse_args()
+
+    if args.list:
+        devs = pointer_devices()
+        if not devs:
+            print("No pointer devices found, or no permission to read them.")
+            return 1
+        for dev in devs:
+            print(describe(dev))
+            dev.close()
+        return 0
+
+    if args.device:
+        devs = [dev for p in args.device if (dev := open_device(p))]
+    else:
+        devs = pointer_devices()
+
+    if not devs:
+        print("No input devices to watch. Try: sudo python3 ~/click-to-gnome-locate-pointer.py --list", file=sys.stderr)
+        return 1
+
+    code = key_code(args.key)
+
+    try:
+        ui = UInput({ecodes.EV_KEY: [code]}, name="click-to-gnome-locate-pointer")
+    except PermissionError:
+        print("Permission denied opening /dev/uinput; try sudo or adjust uinput permissions.", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Could not create uinput device: {exc}\nTry: sudo modprobe uinput", file=sys.stderr)
+        return 1
+
+    states = {dev.fd: DeviceState() for dev in devs}
+
+    print("Watching pointer devices:")
+    for dev in devs:
+        print("  " + describe(dev))
+    print(f"Emitting {args.key} for {args.tap_ms} ms after BTN_LEFT release. Ctrl-C to stop.")
+
+    try:
+        while True:
+            readable, _, _ = select.select(devs, [], [])
+            for dev in readable:
+                state = states[dev.fd]
+                for ev in dev.read():
+                    if ev.type == ecodes.EV_ABS:
+                        if ev.code == ecodes.ABS_X:
+                            state.abs_x = ev.value
+                        elif ev.code == ecodes.ABS_Y:
+                            state.abs_y = ev.value
+                    elif ev.type == ecodes.EV_REL and state.down:
+                        if ev.code in (ecodes.REL_X, ecodes.REL_Y):
+                            state.rel_motion += abs(ev.value)
+                    elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_LEFT:
+                        if ev.value == 1:  # down
+                            state.down = True
+                            state.rel_motion = 0
+                            state.start_abs_x = state.abs_x
+                            state.start_abs_y = state.abs_y
+                        elif ev.value == 0 and state.down:  # up
+                            state.down = False
+                            if args.ignore_drags is not None and drag_distance(state) > args.ignore_drags:
+                                continue
+                            tap(ui, code, args.tap_ms)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        for dev in devs:
+            dev.close()
+        ui.close()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

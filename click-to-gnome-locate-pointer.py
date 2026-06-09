@@ -12,7 +12,12 @@ Install dependencies on Ubuntu/Debian:
     sudo modprobe uinput
 
 Run this script as your normal desktop user, not with sudo:
-    python3 ~/click-to-gnome-locate-pointer.py --ignore-drags 12
+    python3 ~/click-to-gnome-locate-pointer.py
+
+The default drag filter is the same as passing --ignore-drags 12. It measures
+movement while the left button is held; if movement exceeds 12 device units,
+the release is treated as a drag and no Ctrl/ripple is emitted. This avoids
+highlighting the release after dragging windows, selecting text, or resizing.
 
 Before asking for sudo, the script enables GNOME's locate-pointer ripple and
 sets GNOME's locate-pointer key to match --key. By default this is:
@@ -24,8 +29,15 @@ It then re-runs itself with sudo so it can read /dev/input/event* and write
 
 Optional:
     python3 ~/click-to-gnome-locate-pointer.py --list
-    python3 ~/click-to-gnome-locate-pointer.py --key KEY_RIGHTCTRL --ignore-drags 12
-    python3 ~/click-to-gnome-locate-pointer.py --no-gnome-setup --ignore-drags 12
+    python3 ~/click-to-gnome-locate-pointer.py --key KEY_RIGHTCTRL
+    python3 ~/click-to-gnome-locate-pointer.py --ignore-drags 30
+    python3 ~/click-to-gnome-locate-pointer.py --include-drags
+    python3 ~/click-to-gnome-locate-pointer.py --no-gnome-setup
+
+Using --key KEY_RIGHTCTRL sets GNOME's locate key to Control_R and emits right
+Ctrl instead. This may avoid interference from normal left-Ctrl shortcuts, but
+be careful if you use VMs or remote-desktop tools where right Ctrl may be a
+host/special key.
 
 Turn it off:
     # Stop the running script with Ctrl-C, or kill/stop its service if you made one.
@@ -42,8 +54,8 @@ Main risks
 - It is best used as a temporary recording helper, not an always-on daemon.
 - Auto-detection may watch more pointer devices than intended. Use --list and
   --device /dev/input/eventX if it double-fires or reacts to the wrong device.
-- Use --ignore-drags, for example --ignore-drags 12, if you do not want drag
-  releases to trigger the ripple.
+- The default --ignore-drags 12 filter avoids highlighting drag releases;
+  adjust it if your mouse/touchpad reports unusually large or small movement.
 """
 
 from __future__ import annotations
@@ -252,11 +264,22 @@ def main() -> int:
     parser.add_argument(
         "--ignore-drags",
         type=int,
-        default=None,
+        default=12,
         metavar="PIXELS",
-        help="Do not emit Ctrl if movement while held exceeds PIXELS; disabled by default.",
+        help=(
+            "Do not emit Ctrl if movement while the left button is held exceeds PIXELS; "
+            "default 12. This prevents drag releases from being highlighted."
+        ),
+    )
+    parser.add_argument(
+        "--include-drags",
+        action="store_true",
+        help="Disable the drag filter and emit Ctrl on every left-button release.",
     )
     args = parser.parse_args()
+
+    if args.include_drags:
+        args.ignore_drags = None
 
     key_code(args.key)  # Validate early, before changing GNOME settings or asking for sudo.
 
@@ -304,7 +327,14 @@ def main() -> int:
     print("Watching pointer devices:")
     for dev in devs:
         print("  " + describe(dev))
-    print(f"Emitting {args.key} for {args.tap_ms} ms after BTN_LEFT release. Ctrl-C to stop.")
+    drag_msg = (
+        "including drag releases"
+        if args.ignore_drags is None
+        else f"ignoring releases after >{args.ignore_drags} movement units"
+    )
+    print(
+        f"Emitting {args.key} for {args.tap_ms} ms after BTN_LEFT release, {drag_msg}. Ctrl-C to stop."
+    )
 
     try:
         while True:

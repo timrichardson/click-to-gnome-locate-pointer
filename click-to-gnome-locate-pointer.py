@@ -7,9 +7,19 @@ Emit a quick Ctrl tap after each left mouse-button release so GNOME's
 
 Usage
 -----
-Install dependencies on Ubuntu/Debian:
+Install dependencies:
+    # Ubuntu/Debian
     sudo apt install python3-evdev
+
+    # Arch Linux
+    sudo pacman -S python-evdev
+
+    # Fedora
+    sudo dnf install python3-evdev
+
+    # All distros: load uinput now and on future boots
     sudo modprobe uinput
+    echo uinput | sudo tee /etc/modules-load.d/uinput.conf
 
 Run this script as your normal desktop user, not with sudo:
     python3 ~/click-to-gnome-locate-pointer.py
@@ -81,10 +91,11 @@ try:
     from evdev import InputDevice, UInput, ecodes, list_devices
 except ImportError:  # pragma: no cover - friendly runtime error
     print(
-        "Missing Python module 'evdev'. Install it with:\n"
-        "  sudo apt install python3-evdev\n"
-        "or:\n"
-        "  python3 -m pip install --user evdev",
+        "Missing Python module 'evdev'. Install the distro package:\n"
+        "  Ubuntu/Debian: sudo apt install python3-evdev\n"
+        "  Arch Linux:    sudo pacman -S python-evdev\n"
+        "  Fedora:        sudo dnf install python3-evdev\n"
+        "Prefer distro packages over pip because the sudo child must import evdev too.",
         file=sys.stderr,
     )
     sys.exit(2)

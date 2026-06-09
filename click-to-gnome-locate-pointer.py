@@ -7,24 +7,30 @@ Emit a quick Ctrl tap after each left mouse-button release so GNOME's
 
 Usage
 -----
-Enable GNOME's locate-pointer ripple as your normal user:
-    gsettings set org.gnome.desktop.interface locate-pointer true
-
 Install dependencies on Ubuntu/Debian:
     sudo apt install python3-evdev
     sudo modprobe uinput
 
-Run this script with enough permission to read /dev/input/event* and write
-/dev/uinput, usually:
-    sudo python3 ~/click-to-gnome-locate-pointer.py
+Run this script as your normal desktop user, not with sudo:
+    python3 ~/click-to-gnome-locate-pointer.py --ignore-drags 12
+
+Before asking for sudo, the script enables GNOME's locate-pointer ripple and
+sets GNOME's locate-pointer key to match --key. By default this is:
+    gsettings set org.gnome.desktop.interface locate-pointer true
+    gsettings set org.gnome.mutter locate-pointer-key Control_L
+
+It then re-runs itself with sudo so it can read /dev/input/event* and write
+/dev/uinput. sudo will prompt for your password if needed.
 
 Optional:
-    sudo python3 ~/click-to-gnome-locate-pointer.py --list
-    sudo python3 ~/click-to-gnome-locate-pointer.py --ignore-drags 12
+    python3 ~/click-to-gnome-locate-pointer.py --list
+    python3 ~/click-to-gnome-locate-pointer.py --key KEY_RIGHTCTRL --ignore-drags 12
+    python3 ~/click-to-gnome-locate-pointer.py --no-gnome-setup --ignore-drags 12
 
 Turn it off:
     # Stop the running script with Ctrl-C, or kill/stop its service if you made one.
     gsettings set org.gnome.desktop.interface locate-pointer false
+    gsettings reset org.gnome.mutter locate-pointer-key
 
 Main risks
 ----------
@@ -45,9 +51,12 @@ from __future__ import annotations
 import argparse
 import os
 import select
+import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 try:
     from evdev import InputDevice, UInput, ecodes, list_devices
@@ -140,6 +149,83 @@ def tap(ui: UInput, code: int, tap_ms: int) -> None:
     ui.syn()
 
 
+GNOME_KEYSYMS = {
+    "KEY_LEFTCTRL": "Control_L",
+    "KEY_RIGHTCTRL": "Control_R",
+    "KEY_LEFTSHIFT": "Shift_L",
+    "KEY_RIGHTSHIFT": "Shift_R",
+    "KEY_LEFTALT": "Alt_L",
+    "KEY_RIGHTALT": "Alt_R",
+}
+
+
+def gnome_keysym_for_evdev(evdev_key_name: str) -> str:
+    if evdev_key_name in GNOME_KEYSYMS:
+        return GNOME_KEYSYMS[evdev_key_name]
+    if evdev_key_name.startswith("KEY_F") and evdev_key_name[5:].isdigit():
+        return evdev_key_name[4:]
+    raise SystemExit(
+        f"Don't know the GNOME keysym for {evdev_key_name!r}. "
+        "Use KEY_LEFTCTRL or KEY_RIGHTCTRL, or add a mapping in GNOME_KEYSYMS."
+    )
+
+
+def run_gsettings(args: list[str]) -> bool:
+    if shutil.which("gsettings") is None:
+        print("gsettings not found; skipping GNOME locate-pointer setup.", file=sys.stderr)
+        return False
+
+    proc = subprocess.run(
+        ["gsettings", *args],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        print(
+            "Could not configure GNOME with gsettings; skipping GNOME setup.\n"
+            f"gsettings {' '.join(args)}\n"
+            f"{proc.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def configure_gnome_locate_pointer(evdev_key_name: str) -> None:
+    if os.geteuid() == 0:
+        print(
+            "Skipping GNOME setup while running as root. For automatic GNOME setup, "
+            "run this script as your normal desktop user and let it ask for sudo.",
+            file=sys.stderr,
+        )
+        return
+
+    gnome_key = gnome_keysym_for_evdev(evdev_key_name)
+    ok = True
+    ok &= run_gsettings(["set", "org.gnome.desktop.interface", "locate-pointer", "true"])
+    ok &= run_gsettings(["set", "org.gnome.mutter", "locate-pointer-key", gnome_key])
+    if ok:
+        print(f"GNOME locate-pointer enabled; trigger key set to {gnome_key}.")
+
+
+def reexec_with_sudo() -> None:
+    if os.geteuid() == 0:
+        return
+
+    sudo = shutil.which("sudo")
+    if sudo is None:
+        print("sudo not found; run this script as root or install sudo.", file=sys.stderr)
+        raise SystemExit(1)
+
+    script = str(Path(__file__).resolve())
+    forwarded_args = [arg for arg in sys.argv[1:] if arg != "--no-gnome-setup"]
+    cmd = [sudo, sys.executable or "python3", script, "--no-gnome-setup", *forwarded_args]
+    print("Requesting sudo so the script can read /dev/input/event* and write /dev/uinput...")
+    os.execvp(sudo, cmd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Convert left mouse-button release into a brief Ctrl tap for GNOME locate-pointer."
@@ -154,6 +240,16 @@ def main() -> int:
     parser.add_argument("--key", default="KEY_LEFTCTRL", help="uinput key to emit; default KEY_LEFTCTRL.")
     parser.add_argument("--tap-ms", type=int, default=25, help="Ctrl tap length in milliseconds; default 25.")
     parser.add_argument(
+        "--no-gnome-setup",
+        action="store_true",
+        help="Do not enable GNOME locate-pointer or set org.gnome.mutter locate-pointer-key before sudo.",
+    )
+    parser.add_argument(
+        "--no-auto-sudo",
+        action="store_true",
+        help="Do not re-run through sudo automatically; useful if permissions are handled another way.",
+    )
+    parser.add_argument(
         "--ignore-drags",
         type=int,
         default=None,
@@ -161,6 +257,14 @@ def main() -> int:
         help="Do not emit Ctrl if movement while held exceeds PIXELS; disabled by default.",
     )
     args = parser.parse_args()
+
+    key_code(args.key)  # Validate early, before changing GNOME settings or asking for sudo.
+
+    if not args.list and not args.no_gnome_setup:
+        configure_gnome_locate_pointer(args.key)
+
+    if not args.no_auto_sudo:
+        reexec_with_sudo()
 
     if args.list:
         devs = pointer_devices()
@@ -178,7 +282,10 @@ def main() -> int:
         devs = pointer_devices()
 
     if not devs:
-        print("No input devices to watch. Try: sudo python3 ~/click-to-gnome-locate-pointer.py --list", file=sys.stderr)
+        print(
+            "No input devices to watch. Try --list, check /dev/input permissions, or run: sudo modprobe uinput",
+            file=sys.stderr,
+        )
         return 1
 
     code = key_code(args.key)

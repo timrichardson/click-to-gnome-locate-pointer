@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Tim Richardson
 """
 Emit a quick Ctrl tap after each left mouse-button release so GNOME's
 "Locate Pointer" ripple can be used as a mouse-click highlight under Wayland.
@@ -23,6 +25,19 @@ Optional:
 Turn it off:
     # Stop the running script with Ctrl-C, or kill/stop its service if you made one.
     gsettings set org.gnome.desktop.interface locate-pointer false
+
+Main risks
+----------
+- It needs elevated input privileges: read access to /dev/input/event* and
+  write access to /dev/uinput.
+- The focused application also sees the fake Ctrl tap. Usually harmless, but
+  it can interfere with apps, VMs, remote desktops, games, terminals, or if
+  another key is physically held at the same time.
+- It is best used as a temporary recording helper, not an always-on daemon.
+- Auto-detection may watch more pointer devices than intended. Use --list and
+  --device /dev/input/eventX if it double-fires or reacts to the wrong device.
+- Use --ignore-drags, for example --ignore-drags 12, if you do not want drag
+  releases to trigger the ripple.
 """
 
 from __future__ import annotations

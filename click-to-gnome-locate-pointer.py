@@ -24,8 +24,12 @@ sets GNOME's locate-pointer key to match --key. By default this is:
     gsettings set org.gnome.desktop.interface locate-pointer true
     gsettings set org.gnome.mutter locate-pointer-key Control_L
 
-It then re-runs itself with sudo so it can read /dev/input/event* and write
-/dev/uinput. sudo will prompt for your password if needed.
+It then runs a sudo child process so it can read /dev/input/event* and write
+/dev/uinput. sudo will prompt for your password if needed. The non-root parent
+waits for the sudo child; when it exits, the parent restores the previous GNOME
+locate-pointer setting and locate-pointer key. If the ripple was off when you
+started the script, it is turned off again on exit. Normal Ctrl-C is handled;
+SIGKILL, a hard crash, or closing the session may skip restoration.
 
 Optional:
     python3 ~/click-to-gnome-locate-pointer.py --list
@@ -48,6 +52,8 @@ Main risks
 ----------
 - It needs elevated input privileges: read access to /dev/input/event* and
   write access to /dev/uinput.
+- It does not capture or consume physical Ctrl key presses; it only emits a
+  short synthetic Ctrl tap after left-button release.
 - The focused application also sees the fake Ctrl tap. Usually harmless, but
   it can interfere with apps, VMs, remote desktops, games, terminals, or if
   another key is physically held at the same time.
@@ -64,6 +70,7 @@ import argparse
 import os
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -91,6 +98,12 @@ class DeviceState:
     abs_y: int | None = None
     start_abs_x: int | None = None
     start_abs_y: int | None = None
+
+
+@dataclass
+class GnomeState:
+    locate_pointer: str | None = None
+    locate_pointer_key: str | None = None
 
 
 def key_code(name: str) -> int:
@@ -182,13 +195,39 @@ def gnome_keysym_for_evdev(evdev_key_name: str) -> str:
     )
 
 
-def run_gsettings(args: list[str]) -> bool:
+def gsettings_available() -> bool:
     if shutil.which("gsettings") is None:
         print("gsettings not found; skipping GNOME locate-pointer setup.", file=sys.stderr)
         return False
+    return True
+
+
+def gsettings_get(schema: str, key: str) -> str | None:
+    if not gsettings_available():
+        return None
 
     proc = subprocess.run(
-        ["gsettings", *args],
+        ["gsettings", "get", schema, key],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        print(
+            f"Could not read GNOME setting {schema} {key}: {proc.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return None
+    return proc.stdout.strip()
+
+
+def gsettings_set(schema: str, key: str, value: str) -> bool:
+    if not gsettings_available():
+        return False
+
+    proc = subprocess.run(
+        ["gsettings", "set", schema, key, value],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
@@ -196,46 +235,101 @@ def run_gsettings(args: list[str]) -> bool:
     )
     if proc.returncode != 0:
         print(
-            "Could not configure GNOME with gsettings; skipping GNOME setup.\n"
-            f"gsettings {' '.join(args)}\n"
-            f"{proc.stderr.strip()}",
+            f"Could not set GNOME setting {schema} {key} {value}: {proc.stderr.strip()}",
             file=sys.stderr,
         )
         return False
     return True
 
 
-def configure_gnome_locate_pointer(evdev_key_name: str) -> None:
+def configure_gnome_locate_pointer(evdev_key_name: str) -> GnomeState | None:
     if os.geteuid() == 0:
         print(
             "Skipping GNOME setup while running as root. For automatic GNOME setup, "
             "run this script as your normal desktop user and let it ask for sudo.",
             file=sys.stderr,
         )
-        return
+        return None
 
     gnome_key = gnome_keysym_for_evdev(evdev_key_name)
+    original = GnomeState(
+        locate_pointer=gsettings_get("org.gnome.desktop.interface", "locate-pointer"),
+        locate_pointer_key=gsettings_get("org.gnome.mutter", "locate-pointer-key"),
+    )
+
     ok = True
-    ok &= run_gsettings(["set", "org.gnome.desktop.interface", "locate-pointer", "true"])
-    ok &= run_gsettings(["set", "org.gnome.mutter", "locate-pointer-key", gnome_key])
+    ok &= gsettings_set("org.gnome.desktop.interface", "locate-pointer", "true")
+    ok &= gsettings_set("org.gnome.mutter", "locate-pointer-key", gnome_key)
     if ok:
         print(f"GNOME locate-pointer enabled; trigger key set to {gnome_key}.")
+        return original
+    return None
 
 
-def reexec_with_sudo() -> None:
+def restore_gnome_locate_pointer(original: GnomeState | None) -> None:
+    if os.geteuid() == 0 or original is None:
+        return
+
+    restored_any = False
+    if original.locate_pointer is not None:
+        restored_any |= gsettings_set(
+            "org.gnome.desktop.interface", "locate-pointer", original.locate_pointer
+        )
+    if original.locate_pointer_key is not None:
+        restored_any |= gsettings_set(
+            "org.gnome.mutter", "locate-pointer-key", original.locate_pointer_key
+        )
+    if restored_any:
+        print("Restored previous GNOME locate-pointer settings.")
+
+
+def run_with_sudo_and_exit(original_gnome: GnomeState | None) -> None:
     if os.geteuid() == 0:
         return
 
     sudo = shutil.which("sudo")
     if sudo is None:
         print("sudo not found; run this script as root or install sudo.", file=sys.stderr)
+        restore_gnome_locate_pointer(original_gnome)
         raise SystemExit(1)
 
     script = str(Path(__file__).resolve())
-    forwarded_args = [arg for arg in sys.argv[1:] if arg != "--no-gnome-setup"]
-    cmd = [sudo, sys.executable or "python3", script, "--no-gnome-setup", *forwarded_args]
+    forwarded_args = [
+        arg for arg in sys.argv[1:] if arg not in ("--no-gnome-setup", "--no-auto-sudo")
+    ]
+    cmd = [
+        sudo,
+        sys.executable or "python3",
+        script,
+        "--no-gnome-setup",
+        "--no-auto-sudo",
+        *forwarded_args,
+    ]
+
     print("Requesting sudo so the script can read /dev/input/event* and write /dev/uinput...")
-    os.execvp(sudo, cmd)
+    proc: subprocess.Popen[str] | None = None
+    return_code = 1
+    try:
+        proc = subprocess.Popen(cmd, text=True)
+        while True:
+            try:
+                return_code = proc.wait()
+                break
+            except KeyboardInterrupt:
+                print("\nStopping sudo child...")
+                if proc.poll() is None:
+                    proc.send_signal(signal.SIGINT)
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        restore_gnome_locate_pointer(original_gnome)
+
+    raise SystemExit(return_code)
 
 
 def main() -> int:
@@ -283,11 +377,12 @@ def main() -> int:
 
     key_code(args.key)  # Validate early, before changing GNOME settings or asking for sudo.
 
+    original_gnome: GnomeState | None = None
     if not args.list and not args.no_gnome_setup:
-        configure_gnome_locate_pointer(args.key)
+        original_gnome = configure_gnome_locate_pointer(args.key)
 
     if not args.no_auto_sudo:
-        reexec_with_sudo()
+        run_with_sudo_and_exit(original_gnome)
 
     if args.list:
         devs = pointer_devices()

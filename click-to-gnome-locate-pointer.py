@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Tim Richardson
 """
-Emit a quick Ctrl tap after each left mouse-button release so GNOME's
+Emit a quick Ctrl tap after each primary mouse-button release so GNOME's
 "Locate Pointer" ripple can be used as a mouse-click highlight under Wayland.
 
 Usage
@@ -24,8 +24,12 @@ Install dependencies:
 Run this script as your normal desktop user, not with sudo:
     python3 ~/click-to-gnome-locate-pointer.py
 
+By default, the script reads GNOME's mouse handedness setting and watches raw
+BTN_LEFT for a right-handed mouse or raw BTN_RIGHT for a left-handed mouse.
+Use --button left or --button right to override automatic selection.
+
 The default drag filter is the same as passing --ignore-drags 12. It measures
-movement while the left button is held; if movement exceeds 12 device units,
+movement while the selected button is held; if movement exceeds 12 device units,
 the release is treated as a drag and no Ctrl/ripple is emitted. This avoids
 highlighting the release after dragging windows, selecting text, or resizing.
 
@@ -43,6 +47,7 @@ SIGKILL, a hard crash, or closing the session may skip restoration.
 
 Optional:
     python3 ~/click-to-gnome-locate-pointer.py --list
+    python3 ~/click-to-gnome-locate-pointer.py --button right
     python3 ~/click-to-gnome-locate-pointer.py --key KEY_RIGHTCTRL
     python3 ~/click-to-gnome-locate-pointer.py --ignore-drags 30
     python3 ~/click-to-gnome-locate-pointer.py --include-drags
@@ -64,7 +69,7 @@ Main risks
   /dev/input/event* and writing /dev/uinput require elevated privileges. The
   script does not make permanent permission changes.
 - It does not capture or consume physical Ctrl key presses; it only emits a
-  short synthetic Ctrl tap after left-button release.
+  short synthetic Ctrl tap after the selected mouse-button release.
 - The focused application also sees the fake Ctrl tap. Usually harmless, but
   it can interfere with apps, VMs, remote desktops, games, terminals, or if
   another key is physically held at the same time.
@@ -125,6 +130,46 @@ def key_code(name: str) -> int:
     return code
 
 
+BUTTON_NAMES = {
+    "left": "BTN_LEFT",
+    "right": "BTN_RIGHT",
+}
+
+
+def resolve_button(button: str) -> str:
+    """Resolve auto to the raw button used for GNOME's primary mouse click."""
+    if button != "auto":
+        return button
+
+    if os.geteuid() == 0:
+        print(
+            "Cannot detect the desktop user's mouse handedness while running as root; "
+            "defaulting to --button left.",
+            file=sys.stderr,
+        )
+        return "left"
+
+    left_handed = gsettings_get(
+        "org.gnome.desktop.peripherals.mouse", "left-handed"
+    )
+    if left_handed == "true":
+        print("Detected GNOME left-handed mouse configuration; watching BTN_RIGHT.")
+        return "right"
+    if left_handed == "false":
+        print("Detected GNOME right-handed mouse configuration; watching BTN_LEFT.")
+        return "left"
+
+    print(
+        "Could not detect GNOME mouse handedness; defaulting to --button left.",
+        file=sys.stderr,
+    )
+    return "left"
+
+
+def button_code(button: str) -> int:
+    return getattr(ecodes, BUTTON_NAMES[button])
+
+
 def open_device(path: str) -> InputDevice | None:
     try:
         return InputDevice(path)
@@ -135,7 +180,7 @@ def open_device(path: str) -> InputDevice | None:
     return None
 
 
-def is_pointer(dev: InputDevice) -> bool:
+def is_pointer(dev: InputDevice, watched_button: int) -> bool:
     try:
         caps = dev.capabilities(absinfo=False)
     except OSError:
@@ -145,21 +190,21 @@ def is_pointer(dev: InputDevice) -> bool:
     rels = set(caps.get(ecodes.EV_REL, []))
     abss = set(caps.get(ecodes.EV_ABS, []))
 
-    has_left_click = ecodes.BTN_LEFT in keys
+    has_watched_button = watched_button in keys
     has_pointer_axis = (
         ecodes.REL_X in rels
         or ecodes.REL_Y in rels
         or ecodes.ABS_X in abss
         or ecodes.ABS_Y in abss
     )
-    return has_left_click and has_pointer_axis
+    return has_watched_button and has_pointer_axis
 
 
-def pointer_devices() -> list[InputDevice]:
+def pointer_devices(watched_button: int) -> list[InputDevice]:
     devices: list[InputDevice] = []
     for path in list_devices():
         dev = open_device(path)
-        if dev and is_pointer(dev):
+        if dev and is_pointer(dev, watched_button):
             devices.append(dev)
         elif dev:
             dev.close()
@@ -209,7 +254,7 @@ def gnome_keysym_for_evdev(evdev_key_name: str) -> str:
 
 def gsettings_available() -> bool:
     if shutil.which("gsettings") is None:
-        print("gsettings not found; skipping GNOME locate-pointer setup.", file=sys.stderr)
+        print("gsettings not found; GNOME integration is unavailable.", file=sys.stderr)
         return False
     return True
 
@@ -295,7 +340,7 @@ def restore_gnome_locate_pointer(original: GnomeState | None) -> None:
         print("Restored previous GNOME locate-pointer settings.")
 
 
-def run_with_sudo_and_exit(original_gnome: GnomeState | None) -> None:
+def run_with_sudo_and_exit(original_gnome: GnomeState | None, button: str) -> None:
     if os.geteuid() == 0:
         return
 
@@ -316,6 +361,8 @@ def run_with_sudo_and_exit(original_gnome: GnomeState | None) -> None:
         "--no-gnome-setup",
         "--no-auto-sudo",
         *forwarded_args,
+        "--button",
+        button,
     ]
 
     print("Requesting sudo so the script can read /dev/input/event* and write /dev/uinput...")
@@ -346,7 +393,7 @@ def run_with_sudo_and_exit(original_gnome: GnomeState | None) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Convert left mouse-button release into a brief Ctrl tap for GNOME locate-pointer."
+        description="Convert primary mouse-button release into a brief Ctrl tap for GNOME locate-pointer."
     )
     parser.add_argument(
         "-d",
@@ -355,6 +402,15 @@ def main() -> int:
         help="/dev/input/eventX device to watch; repeatable. Default: all detected pointer devices.",
     )
     parser.add_argument("--list", action="store_true", help="List detected pointer devices and exit.")
+    parser.add_argument(
+        "--button",
+        choices=("auto", "left", "right"),
+        default="auto",
+        help=(
+            "Raw mouse button to watch. Default: auto (BTN_LEFT normally, "
+            "BTN_RIGHT when GNOME's mouse setting is left-handed)."
+        ),
+    )
     parser.add_argument("--key", default="KEY_LEFTCTRL", help="uinput key to emit; default KEY_LEFTCTRL.")
     parser.add_argument("--tap-ms", type=int, default=25, help="Ctrl tap length in milliseconds; default 25.")
     parser.add_argument(
@@ -373,14 +429,14 @@ def main() -> int:
         default=12,
         metavar="PIXELS",
         help=(
-            "Do not emit Ctrl if movement while the left button is held exceeds PIXELS; "
+            "Do not emit Ctrl if movement while the selected button is held exceeds PIXELS; "
             "default 12. This prevents drag releases from being highlighted."
         ),
     )
     parser.add_argument(
         "--include-drags",
         action="store_true",
-        help="Disable the drag filter and emit Ctrl on every left-button release.",
+        help="Disable the drag filter and emit Ctrl on every selected-button release.",
     )
     args = parser.parse_args()
 
@@ -388,16 +444,19 @@ def main() -> int:
         args.ignore_drags = None
 
     key_code(args.key)  # Validate early, before changing GNOME settings or asking for sudo.
+    args.button = resolve_button(args.button)
+    watched_button = button_code(args.button)
+    watched_button_name = BUTTON_NAMES[args.button]
 
     original_gnome: GnomeState | None = None
     if not args.list and not args.no_gnome_setup:
         original_gnome = configure_gnome_locate_pointer(args.key)
 
     if not args.no_auto_sudo:
-        run_with_sudo_and_exit(original_gnome)
+        run_with_sudo_and_exit(original_gnome, args.button)
 
     if args.list:
-        devs = pointer_devices()
+        devs = pointer_devices(watched_button)
         if not devs:
             print("No pointer devices found, or no permission to read them.")
             return 1
@@ -409,7 +468,7 @@ def main() -> int:
     if args.device:
         devs = [dev for p in args.device if (dev := open_device(p))]
     else:
-        devs = pointer_devices()
+        devs = pointer_devices(watched_button)
 
     if not devs:
         print(
@@ -440,7 +499,8 @@ def main() -> int:
         else f"ignoring releases after >{args.ignore_drags} movement units"
     )
     print(
-        f"Emitting {args.key} for {args.tap_ms} ms after BTN_LEFT release, {drag_msg}. Ctrl-C to stop."
+        f"Emitting {args.key} for {args.tap_ms} ms after {watched_button_name} release, "
+        f"{drag_msg}. Ctrl-C to stop."
     )
 
     try:
@@ -457,7 +517,7 @@ def main() -> int:
                     elif ev.type == ecodes.EV_REL and state.down:
                         if ev.code in (ecodes.REL_X, ecodes.REL_Y):
                             state.rel_motion += abs(ev.value)
-                    elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_LEFT:
+                    elif ev.type == ecodes.EV_KEY and ev.code == watched_button:
                         if ev.value == 1:  # down
                             state.down = True
                             state.rel_motion = 0

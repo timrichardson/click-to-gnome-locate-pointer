@@ -1,7 +1,7 @@
 # Click to GNOME Locate Pointer
 
 Highlight mouse clicks on GNOME Wayland by triggering GNOME's built-in
-**Locate Pointer** ripple after each raw Linux `BTN_LEFT` release.
+**Locate Pointer** ripple after each primary mouse-button release.
 
 Useful for screen recordings and demonstrations. The script watches Linux
 input events and emits a brief synthetic Ctrl tap through `uinput`.
@@ -52,6 +52,9 @@ The script enables GNOME's Locate Pointer feature, starts a privileged child
 to access the input devices, and restores your previous GNOME settings when it
 exits. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
 
+It automatically reads GNOME's mouse handedness setting, watching raw
+`BTN_LEFT` for a right-handed mouse or raw `BTN_RIGHT` for a left-handed mouse.
+
 By default, releases after more than 12 device units of movement are ignored,
 preventing a ripple after most drag operations.
 
@@ -63,6 +66,9 @@ python3 click-to-gnome-locate-pointer.py --list
 
 # Watch one device
 python3 click-to-gnome-locate-pointer.py --device /dev/input/event5
+
+# Override automatic handedness detection with a raw button
+python3 click-to-gnome-locate-pointer.py --button right
 
 # Adjust or disable drag filtering
 python3 click-to-gnome-locate-pointer.py --ignore-drags 30
@@ -81,10 +87,9 @@ Run `python3 click-to-gnome-locate-pointer.py --help` for all options.
   The script does not make permanent permission changes.
 - Auto-detection may watch too many devices. Use `--list` and `--device` if
   clicks produce duplicate ripples.
-- The script watches the raw Linux `BTN_LEFT` event, before GNOME applies its
-  logical button mapping. This is normally the physical left button. With a
-  left-handed mouse configuration, GNOME may treat it as right-click, so the
-  ripple can appear on right-click rather than on the primary click.
+- `--button auto` follows GNOME's mouse handedness setting. Use `--button left`
+  or `--button right` for unusual mappings. Touchpads configured independently
+  of the mouse may require an explicit override.
 - A hard crash or `SIGKILL` may prevent automatic restoration of GNOME settings.
 
 To disable and reset Locate Pointer manually:

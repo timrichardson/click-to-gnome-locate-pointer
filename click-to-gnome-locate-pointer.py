@@ -93,18 +93,25 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    from evdev import InputDevice, UInput, ecodes, list_devices
-except ImportError:  # pragma: no cover - friendly runtime error
-    print(
-        "Missing Python module 'evdev'. Install the distro package:\n"
-        "  Ubuntu/Debian: sudo apt install python3-evdev\n"
-        "  Arch Linux:    sudo pacman -S python-evdev\n"
-        "  Fedora:        sudo dnf install python3-evdev\n"
-        "Prefer distro packages over pip because the sudo child must import evdev too.",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+VERSION = "0.8"
+
+
+def load_evdev() -> None:
+    """Load the runtime dependency after --help and --version are handled."""
+    global InputDevice, UInput, ecodes, list_devices
+
+    try:
+        from evdev import InputDevice, UInput, ecodes, list_devices
+    except ImportError:  # pragma: no cover - friendly runtime error
+        print(
+            "Missing Python module 'evdev'. Install the distro package:\n"
+            "  Ubuntu/Debian: sudo apt install python3-evdev\n"
+            "  Arch Linux:    sudo pacman -S python-evdev\n"
+            "  Fedora:        sudo dnf install python3-evdev\n"
+            "Prefer distro packages over pip because the sudo child must import evdev too.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
 
 @dataclass
@@ -393,6 +400,7 @@ def run_with_sudo_and_exit(original_gnome: GnomeState | None, button: str) -> No
 
 def main() -> int:
     parser = argparse.ArgumentParser(
+        prog="click-to-gnome-locate-pointer",
         description="Convert primary mouse-button release into a brief Ctrl tap for GNOME locate-pointer."
     )
     parser.add_argument(
@@ -402,6 +410,7 @@ def main() -> int:
         help="/dev/input/eventX device to watch; repeatable. Default: all detected pointer devices.",
     )
     parser.add_argument("--list", action="store_true", help="List detected pointer devices and exit.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     parser.add_argument(
         "--button",
         choices=("auto", "left", "right"),
@@ -439,6 +448,7 @@ def main() -> int:
         help="Disable the drag filter and emit Ctrl on every selected-button release.",
     )
     args = parser.parse_args()
+    load_evdev()
 
     if args.include_drags:
         args.ignore_drags = None

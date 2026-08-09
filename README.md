@@ -3,8 +3,9 @@
 Highlight mouse clicks on GNOME Wayland by triggering GNOME's built-in
 **Locate Pointer** ripple after each primary mouse-button release.
 
-Useful for screen recordings and demonstrations. The script watches Linux
-input events and emits a brief synthetic Ctrl tap through `uinput`.
+Useful for screen recordings and demonstrations. While running, the script
+temporarily enables Locate Pointer and emits a brief synthetic Ctrl tap through
+`uinput` after each primary-button release.
 
 > [!WARNING]
 > The focused application also receives the synthetic Ctrl tap. This can
@@ -18,7 +19,11 @@ Requires Python 3.10+, `python-evdev`, `uinput`, and GNOME on Wayland.
 ```bash
 git clone https://github.com/timrichardson/click-to-gnome-locate-pointer.git
 cd click-to-gnome-locate-pointer
+make install
 ```
+
+This installs `click-to-gnome-locate-pointer` in `~/.local/bin`. Ensure that
+directory is on your `PATH`. Remove it later with `make uninstall`.
 
 Install `python-evdev`:
 
@@ -45,7 +50,7 @@ echo uinput | sudo tee /etc/modules-load.d/uinput.conf
 Run as your normal desktop user, **not** directly with `sudo`:
 
 ```bash
-python3 click-to-gnome-locate-pointer.py
+click-to-gnome-locate-pointer
 ```
 
 The script enables GNOME's Locate Pointer feature, starts a privileged child
@@ -62,23 +67,34 @@ preventing a ripple after most drag operations.
 
 ```bash
 # List detected pointer devices
-python3 click-to-gnome-locate-pointer.py --list
+click-to-gnome-locate-pointer --list
 
 # Watch one device
-python3 click-to-gnome-locate-pointer.py --device /dev/input/event5
+click-to-gnome-locate-pointer --device /dev/input/event5
 
 # Override automatic handedness detection with a raw button
-python3 click-to-gnome-locate-pointer.py --button right
+click-to-gnome-locate-pointer --button right
 
 # Adjust or disable drag filtering
-python3 click-to-gnome-locate-pointer.py --ignore-drags 30
-python3 click-to-gnome-locate-pointer.py --include-drags
+click-to-gnome-locate-pointer --ignore-drags 30
+click-to-gnome-locate-pointer --include-drags
 
 # Emit right Ctrl instead of left Ctrl
-python3 click-to-gnome-locate-pointer.py --key KEY_RIGHTCTRL
+click-to-gnome-locate-pointer --key KEY_RIGHTCTRL
 ```
 
-Run `python3 click-to-gnome-locate-pointer.py --help` for all options.
+Run `click-to-gnome-locate-pointer --help` for all options. The script can also
+be run directly from a checkout with `python3 click-to-gnome-locate-pointer.py`.
+
+## Versions and releases
+
+```bash
+click-to-gnome-locate-pointer --version
+```
+
+Published versions are available from
+[GitHub Releases](https://github.com/timrichardson/click-to-gnome-locate-pointer/releases)
+and use matching Git tags such as `v0.8`.
 
 ## Notes
 

@@ -1,7 +1,7 @@
 # Click to GNOME Locate Pointer
 
 Highlight mouse clicks on GNOME Wayland by triggering GNOME's built-in
-**Locate Pointer** ripple after each left-button release.
+**Locate Pointer** ripple after each raw Linux `BTN_LEFT` release.
 
 Useful for screen recordings and demonstrations. The script watches Linux
 input events and emits a brief synthetic Ctrl tap through `uinput`.
@@ -80,8 +80,10 @@ Run `python3 click-to-gnome-locate-pointer.py --help` for all options.
   `/dev/uinput`; review the code before granting elevated input access.
 - Auto-detection may watch too many devices. Use `--list` and `--device` if
   clicks produce duplicate ripples.
-- Mouse-button remapping, including some left-handed configurations, may need
-  code changes because the script listens for Linux `BTN_LEFT` events.
+- The script watches the raw Linux `BTN_LEFT` event, before GNOME applies its
+  logical button mapping. This is normally the physical left button. With a
+  left-handed mouse configuration, GNOME may treat it as right-click, so the
+  ripple can appear on right-click rather than on the primary click.
 - A hard crash or `SIGKILL` may prevent automatic restoration of GNOME settings.
 
 To disable and reset Locate Pointer manually:

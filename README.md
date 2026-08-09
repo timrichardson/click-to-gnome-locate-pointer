@@ -13,9 +13,11 @@ temporarily enables Locate Pointer and emits a brief synthetic Ctrl tap through
 `uinput` after each primary-button release.
 
 > [!WARNING]
-> The focused application also receives the synthetic Ctrl tap. This can
-> interfere with applications, games, virtual machines, or remote desktops.
+> The focused application also receives the synthetic Ctrl tap. This could possibly
+> interfere with applications. The default synthetic keypress is left Ctrl. If this causes problems, try right
+Ctrl instead using the `--key KEY_RIGHTCTRL` option shown below.
 > Use this as a temporary recording helper, not an always-on daemon.
+
 
 ## Install
 

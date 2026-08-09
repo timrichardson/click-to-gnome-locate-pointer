@@ -60,8 +60,9 @@ Turn it off:
 
 Main risks
 ----------
-- It needs elevated input privileges: read access to /dev/input/event* and
-  write access to /dev/uinput.
+- The input-monitoring child normally runs through sudo because reading
+  /dev/input/event* and writing /dev/uinput require elevated privileges. The
+  script does not make permanent permission changes.
 - It does not capture or consume physical Ctrl key presses; it only emits a
   short synthetic Ctrl tap after left-button release.
 - The focused application also sees the fake Ctrl tap. Usually harmless, but

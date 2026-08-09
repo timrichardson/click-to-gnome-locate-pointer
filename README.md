@@ -76,8 +76,9 @@ Run `python3 click-to-gnome-locate-pointer.py --help` for all options.
 
 ## Notes
 
-- The script needs permission to read `/dev/input/event*` and write to
-  `/dev/uinput`; review the code before granting elevated input access.
+- The input-monitoring child normally runs through `sudo` because reading
+  `/dev/input/event*` and writing `/dev/uinput` require elevated privileges.
+  The script does not make permanent permission changes.
 - Auto-detection may watch too many devices. Use `--list` and `--device` if
   clicks produce duplicate ripples.
 - The script watches the raw Linux `BTN_LEFT` event, before GNOME applies its

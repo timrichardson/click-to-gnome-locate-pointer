@@ -1,9 +1,14 @@
 # Click to GNOME Locate Pointer
 
+Gnome doesn't have a handy feature to highlight clicks when making screen recordings.
+Due to Wayland design, such a feature needs compositor support -- and in Gnome, there is no such thing.
+However, it does have an Accessibility feature to show you where the pointer is via a certain key press.
+Hence, I have a cunning plan ...
+
 Highlight mouse clicks on GNOME Wayland by triggering GNOME's built-in
 **Locate Pointer** ripple after each primary mouse-button release.
 
-Useful for screen recordings and demonstrations. While running, the script
+While running, the script
 temporarily enables Locate Pointer and emits a brief synthetic Ctrl tap through
 `uinput` after each primary-button release.
 
